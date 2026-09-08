@@ -789,7 +789,7 @@ def main():
     # Старт
     application.add_handler(CommandHandler("start", start))
     
-    # Создание магазина
+    # Создание магазина - убираем per_message=True
     shop_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ Создать магазин$"), handle_buttons)],
         states={
@@ -801,12 +801,11 @@ def main():
             ],
             AGREEMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_shop_agreement)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(shop_conv)
     
-    # Остальные обработчики
+    # Остальные обработчики - ВАЖНО: этот обработчик должен быть после ConversationHandler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
     application.add_handler(CallbackQueryHandler(handle_callback))
     
@@ -814,8 +813,7 @@ def main():
     category_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(handle_callback, pattern="^add_category_")],
         states={ADD_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_category)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(category_conv)
     
@@ -831,8 +829,7 @@ def main():
             ],
             ADD_PRODUCT_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_product_description)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(product_conv)
     
@@ -843,8 +840,7 @@ def main():
             PURCHASE_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_address)],
             PURCHASE_PAYMENT: [CallbackQueryHandler(handle_callback, pattern="^payment_")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(order_conv)
     
