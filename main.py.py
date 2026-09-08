@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = "8829785655:AAHv-44OuFHSUV0BFI38kyROyng5PdEVEe0"
 
 # Состояния
-NAME, ABOUT, PHOTO, AGREEMENT, ADD_CATEGORY, ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE, ADD_PRODUCT_PHOTO, ADD_PRODUCT_DESC = range(9)
+NAME, ABOUT, PHOTO, AGREEMENT, ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE, ADD_PRODUCT_PHOTO, ADD_PRODUCT_DESC = range(8)
 
 # Инициализация БД
 def init_db():
@@ -134,6 +134,19 @@ def add_category(shop_id, name):
         logger.error(f"Ошибка: {e}")
         return False
 
+def delete_category(category_id):
+    try:
+        conn = sqlite3.connect('shop_bot.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM products WHERE category_id=?", (category_id,))
+        c.execute("DELETE FROM categories WHERE category_id=?", (category_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        return False
+
 def get_category_products(category_id):
     try:
         conn = sqlite3.connect('shop_bot.db')
@@ -152,6 +165,18 @@ def add_product(category_id, name, price, photo_id, description):
         c = conn.cursor()
         c.execute("INSERT INTO products (category_id, name, price, photo_id, description) VALUES (?, ?, ?, ?, ?)",
                   (category_id, name, price, photo_id, description))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        return False
+
+def delete_product(product_id):
+    try:
+        conn = sqlite3.connect('shop_bot.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM products WHERE product_id=?", (product_id,))
         conn.commit()
         conn.close()
         return True
@@ -368,15 +393,17 @@ async def show_shop_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def show_my_shop(update: Update, context: ContextTypes.DEFAULT_TYPE, shop):
     shop_id, owner_id, name, about, photo_id, agreement, created_date = shop
     
+    # Базовая клавиатура
     keyboard = [
-        [InlineKeyboardButton("📁 Создать категорию", callback_data=f"add_category_{shop_id}")],
+        [InlineKeyboardButton("📁 Создать категорию", callback_data=f"add_cat_{shop_id}")],
     ]
     
+    # Добавляем существующие категории
     categories = get_shop_categories(shop_id)
     for cat_id, cat_name in categories:
-        keyboard.append([InlineKeyboardButton(f"📂 {cat_name}", callback_data=f"manage_category_{cat_id}")])
+        keyboard.append([InlineKeyboardButton(f"📂 {cat_name}", callback_data=f"view_cat_{cat_id}")])
     
-    keyboard.append([InlineKeyboardButton("🗑 Удалить магазин", callback_data=f"delete_shop_{shop_id}")])
+    keyboard.append([InlineKeyboardButton("🗑 Удалить магазин", callback_data=f"del_shop_{shop_id}")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     caption = f"🏪 {name}\n\n📝 {about}\n\n📋 Управление магазином:"
@@ -453,21 +480,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Callback: {data}")
     
-    if data.startswith("add_category_"):
+    # ========== СОЗДАНИЕ КАТЕГОРИИ ==========
+    if data.startswith("add_cat_"):
         shop_id = int(data.split("_")[2])
         context.user_data['temp_shop_id'] = shop_id
-        
-        # Отправляем сообщение с просьбой ввести название
         await query.edit_message_text("Введите название новой категории:")
-        return ADD_CATEGORY
+        # Ждем ответ от пользователя
+        return
     
-    elif data.startswith("manage_category_"):
+    # ========== ПРОСМОТР КАТЕГОРИИ ==========
+    elif data.startswith("view_cat_"):
         category_id = int(data.split("_")[2])
         products = get_category_products(category_id)
         
         keyboard = [
-            [InlineKeyboardButton("➕ Добавить товар", callback_data=f"add_product_{category_id}")],
-            [InlineKeyboardButton("🔙 Назад в магазин", callback_data="back_to_shop")]
+            [InlineKeyboardButton("➕ Добавить товар", callback_data=f"add_prod_{category_id}")],
+            [InlineKeyboardButton("🗑 Удалить категорию", callback_data=f"del_cat_{category_id}")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_shop")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -481,31 +510,47 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=reply_markup)
         return
     
-    elif data.startswith("add_product_"):
+    # ========== УДАЛЕНИЕ КАТЕГОРИИ ==========
+    elif data.startswith("del_cat_"):
+        category_id = int(data.split("_")[2])
+        if delete_category(category_id):
+            await query.edit_message_text("✅ Категория удалена!")
+            # Показываем обновленный магазин
+            shop = get_user_shop(user_id)
+            if shop:
+                await show_my_shop(update, context, shop)
+        else:
+            await query.edit_message_text("❌ Ошибка удаления")
+        return
+    
+    # ========== ДОБАВЛЕНИЕ ТОВАРА ==========
+    elif data.startswith("add_prod_"):
         category_id = int(data.split("_")[2])
         context.user_data['temp_category_id'] = category_id
         await query.edit_message_text("Введите название товара:")
-        return ADD_PRODUCT_NAME
+        return
     
+    # ========== НАЗАД В МАГАЗИН ==========
     elif data == "back_to_shop":
         shop = get_user_shop(user_id)
         if shop:
-            # Отправляем новое сообщение с магазином
             await query.message.delete()
             await show_my_shop(update, context, shop)
         return
     
-    elif data.startswith("delete_shop_"):
+    # ========== УДАЛЕНИЕ МАГАЗИНА ==========
+    elif data.startswith("del_shop_"):
         shop_id = int(data.split("_")[2])
         keyboard = [
-            [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_shop_{shop_id}")],
+            [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_del_shop_{shop_id}")],
             [InlineKeyboardButton("❌ Отмена", callback_data="cancel_delete")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("⚠️ Удалить магазин? Все данные будут потеряны!", reply_markup=reply_markup)
         return
     
-    elif data.startswith("confirm_delete_shop_"):
+    # ========== ПОДТВЕРЖДЕНИЕ УДАЛЕНИЯ МАГАЗИНА ==========
+    elif data.startswith("confirm_del_shop_"):
         shop_id = int(data.split("_")[3])
         if delete_shop(shop_id):
             reply_markup = get_main_keyboard(False)
@@ -514,6 +559,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Ошибка удаления")
         return
     
+    # ========== ОТМЕНА УДАЛЕНИЯ ==========
     elif data == "cancel_delete":
         shop = get_user_shop(user_id)
         if shop:
@@ -521,87 +567,87 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_my_shop(update, context, shop)
         return
 
-# Добавление категории - ЭТА ФУНКЦИЯ ВАЖНА!
-async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    category_name = update.message.text
-    shop_id = context.user_data.get('temp_shop_id')
+# Обработка текстовых сообщений для категорий и товаров
+async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
     
-    logger.info(f"СОЗДАНИЕ КАТЕГОРИИ: '{category_name}' для магазина {shop_id}")
+    # Проверяем, ждем ли мы название категории
+    if context.user_data.get('temp_shop_id'):
+        shop_id = context.user_data.pop('temp_shop_id')
+        if add_category(shop_id, text):
+            await update.message.reply_text(f"✅ Категория '{text}' создана!")
+            shop = get_user_shop(user_id)
+            if shop:
+                await show_my_shop(update, context, shop)
+        else:
+            await update.message.reply_text("❌ Ошибка создания категории.")
+        return
     
-    if not shop_id:
-        await update.message.reply_text("Ошибка. Попробуйте заново.")
-        return ConversationHandler.END
+    # Проверяем, ждем ли мы название товара
+    elif context.user_data.get('temp_category_id'):
+        category_id = context.user_data.pop('temp_category_id')
+        context.user_data['product_name'] = text
+        await update.message.reply_text("💰 Введите цену товара:")
+        return
     
-    if add_category(shop_id, category_name):
-        await update.message.reply_text(f"✅ Категория '{category_name}' создана!")
+    elif context.user_data.get('product_name') and context.user_data.get('product_price') is None:
+        try:
+            price = float(text.replace(',', '.'))
+            context.user_data['product_price'] = price
+            await update.message.reply_text("📷 Отправьте фото (или 'пропустить'):")
+            return
+        except ValueError:
+            await update.message.reply_text("❌ Введите число:")
+            return
+    
+    elif context.user_data.get('product_name') and context.user_data.get('product_price') is not None:
+        if text.lower() == 'пропустить':
+            photo_id = None
+        else:
+            # Если это не фото, проверяем может это описание
+            if not update.message.photo:
+                photo_id = None
+                description = text
+            else:
+                photo_id = update.message.photo[-1].file_id
+                await update.message.reply_text("📝 Введите описание товара:")
+                return
         
-        # Показываем обновленный магазин
-        shop = get_user_shop(update.effective_user.id)
+        # Если есть описание
+        if context.user_data.get('product_description') is None and not update.message.photo:
+            context.user_data['product_description'] = text
+            
+        category_id = context.user_data.get('temp_category_id')
+        product_name = context.user_data.get('product_name')
+        product_price = context.user_data.get('product_price')
+        product_photo = context.user_data.get('product_photo')
+        product_description = context.user_data.get('product_description', '')
+        
+        if add_product(category_id, product_name, product_price, product_photo, product_description):
+            await update.message.reply_text("✅ Товар добавлен!")
+        else:
+            await update.message.reply_text("❌ Ошибка добавления товара.")
+        
+        # Очищаем данные
+        context.user_data.pop('temp_category_id', None)
+        context.user_data.pop('product_name', None)
+        context.user_data.pop('product_price', None)
+        context.user_data.pop('product_photo', None)
+        context.user_data.pop('product_description', None)
+        
+        # Показываем магазин
+        shop = get_user_shop(user_id)
         if shop:
             await show_my_shop(update, context, shop)
-    else:
-        await update.message.reply_text("❌ Ошибка создания категории.")
-    
-    context.user_data.pop('temp_shop_id', None)
-    return ConversationHandler.END
+        return
 
-# Добавление товара
-async def add_product_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['product_name'] = update.message.text
-    await update.message.reply_text("💰 Введите цену товара:")
-    return ADD_PRODUCT_PRICE
-
-async def add_product_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        price = float(update.message.text.replace(',', '.'))
-        context.user_data['product_price'] = price
-        await update.message.reply_text("📷 Отправьте фото (или 'пропустить'):")
-        return ADD_PRODUCT_PHOTO
-    except ValueError:
-        await update.message.reply_text("❌ Введите число:")
-        return ADD_PRODUCT_PRICE
-
-async def add_product_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo:
-        context.user_data['product_photo'] = update.message.photo[-1].file_id
-    else:
-        context.user_data['product_photo'] = None
-    await update.message.reply_text("📝 Введите описание товара:")
-    return ADD_PRODUCT_DESC
-
-async def add_product_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    description = update.message.text
-    category_id = context.user_data.get('temp_category_id')
-    
-    if not category_id:
-        await update.message.reply_text("Ошибка. Попробуйте заново.")
-        return ConversationHandler.END
-    
-    if add_product(
-        category_id,
-        context.user_data.get('product_name', ''),
-        context.user_data.get('product_price', 0),
-        context.user_data.get('product_photo'),
-        description
-    ):
-        await update.message.reply_text("✅ Товар добавлен!")
-    else:
-        await update.message.reply_text("❌ Ошибка добавления товара.")
-    
-    # Возвращаемся в магазин
-    shop = get_user_shop(update.effective_user.id)
-    if shop:
-        await show_my_shop(update, context, shop)
-    
-    for key in ['temp_category_id', 'product_name', 'product_price', 'product_photo']:
-        context.user_data.pop(key, None)
-    
-    return ConversationHandler.END
-
-async def skip_product_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['product_photo'] = None
-    await update.message.reply_text("📝 Введите описание товара:")
-    return ADD_PRODUCT_DESC
+# Обработка фото для товара
+async def handle_photo_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('product_name') and context.user_data.get('product_price') is not None:
+        photo_id = update.message.photo[-1].file_id
+        context.user_data['product_photo'] = photo_id
+        await update.message.reply_text("📝 Введите описание товара:")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отменено.")
@@ -633,34 +679,16 @@ def main():
     )
     application.add_handler(shop_conv)
     
-    # ДОБАВЛЕНИЕ КАТЕГОРИИ - ИСПРАВЛЕНО!
-    category_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(handle_callback, pattern="^add_category_")],
-        states={
-            ADD_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_category)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    application.add_handler(category_conv)
+    # Обработка текстовых сообщений (для категорий и товаров)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     
-    # ДОБАВЛЕНИЕ ТОВАРА
-    product_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(handle_callback, pattern="^add_product_")],
-        states={
-            ADD_PRODUCT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_product_name)],
-            ADD_PRODUCT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_product_price)],
-            ADD_PRODUCT_PHOTO: [
-                MessageHandler(filters.PHOTO, add_product_photo),
-                MessageHandler(filters.Regex("^пропустить$"), skip_product_photo)
-            ],
-            ADD_PRODUCT_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_product_description)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    application.add_handler(product_conv)
+    # Обработка фото (для товаров)
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_input))
     
-    # ОСТАЛЬНЫЕ КНОПКИ - ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ!
+    # Кнопки
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
+    
+    # Callback кнопки
     application.add_handler(CallbackQueryHandler(handle_callback))
     
     logger.info("Бот запущен!")
