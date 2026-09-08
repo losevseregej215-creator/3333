@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = "8829785655:AAHv-44OuFHSUV0BFI38kyROyng5PdEVEe0"
 
 # Состояния
-NAME, ABOUT, PHOTO, AGREEMENT = range(4)
+NAME, ABOUT, PHOTO, AGREEMENT, ADD_CATEGORY, ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE, ADD_PRODUCT_PHOTO, ADD_PRODUCT_DESC, PURCHASE_ADDRESS, PURCHASE_PAYMENT = range(11)
 
 # Инициализация БД
 def init_db():
@@ -189,6 +189,18 @@ def get_category_by_id(category_id):
         category = c.fetchone()
         conn.close()
         return category
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        return None
+
+def get_product(product_id):
+    try:
+        conn = sqlite3.connect('shop_bot.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM products WHERE product_id=?", (product_id,))
+        product = c.fetchone()
+        conn.close()
+        return product
     except Exception as e:
         logger.error(f"Ошибка: {e}")
         return None
@@ -398,12 +410,12 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Главное меню:", reply_markup=reply_markup)
         return
 
-# Создание магазина
+# Создание магазина - ЭТИ ФУНКЦИИ ВАЖНЫ!
 async def create_shop_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     shop_name = update.message.text
     
-    logger.info(f"Получено название: {shop_name} от {user_id}")
+    logger.info(f"Получено название магазина: '{shop_name}' от {user_id}")
     
     # Проверяем, не занято ли имя
     if get_shop_by_name(shop_name):
@@ -437,7 +449,7 @@ async def create_shop_agreement(update: Update, context: ContextTypes.DEFAULT_TY
     shop_about = context.user_data.get('shop_about', '')
     shop_photo = context.user_data.get('shop_photo')
     
-    logger.info(f"Создаем магазин: {shop_name} для {user_id}")
+    logger.info(f"Создаем магазин: '{shop_name}' для {user_id}")
     
     # СОЗДАЕМ МАГАЗИН
     shop_id = create_shop(user_id, shop_name, shop_about, shop_photo, agreement)
@@ -589,6 +601,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shop = get_user_shop(user_id)
         if shop:
             await show_shop(update, context, shop)
+        return
+    
+    elif data.startswith("payment_transfer") or data.startswith("payment_cash"):
+        await order_payment(update, context)
         return
 
 async def show_shop(update, context, shop):
@@ -773,7 +789,7 @@ def main():
     # Старт
     application.add_handler(CommandHandler("start", start))
     
-    # Создание магазина
+    # Создание магазина - ВАЖНО: entry_points должен быть правильным
     shop_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ Создать магазин$"), handle_buttons)],
         states={
@@ -785,7 +801,8 @@ def main():
             ],
             AGREEMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_shop_agreement)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=True  # Добавляем это!
     )
     application.add_handler(shop_conv)
     
@@ -797,7 +814,8 @@ def main():
     category_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(handle_callback, pattern="^add_category_")],
         states={ADD_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_category)]},
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=True
     )
     application.add_handler(category_conv)
     
@@ -813,7 +831,8 @@ def main():
             ],
             ADD_PRODUCT_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_product_description)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=True
     )
     application.add_handler(product_conv)
     
@@ -822,9 +841,10 @@ def main():
         entry_points=[CallbackQueryHandler(handle_callback, pattern="^order_product_")],
         states={
             PURCHASE_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_address)],
-            PURCHASE_PAYMENT: [CallbackQueryHandler(order_payment, pattern="^payment_")],
+            PURCHASE_PAYMENT: [CallbackQueryHandler(handle_callback, pattern="^payment_")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=True
     )
     application.add_handler(order_conv)
     
