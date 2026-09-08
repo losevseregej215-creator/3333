@@ -265,7 +265,6 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     elif text.startswith("📂 "):
-        # Выбор категории для просмотра товаров
         category_name = text.replace("📂 ", "")
         shop_id = context.user_data.get('current_shop_id')
         
@@ -302,7 +301,6 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     elif text.startswith("📦 "):
-        # Просмотр товара
         product_info = text.replace("📦 ", "")
         product_name = product_info.split(" - ")[0]
         
@@ -458,7 +456,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("add_category_"):
         shop_id = int(data.split("_")[2])
         context.user_data['temp_shop_id'] = shop_id
-        await query.edit_message_text("Введите название категории:")
+        
+        # Отправляем сообщение с просьбой ввести название
+        await query.edit_message_text("Введите название новой категории:")
         return ADD_CATEGORY
     
     elif data.startswith("manage_category_"):
@@ -490,6 +490,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "back_to_shop":
         shop = get_user_shop(user_id)
         if shop:
+            # Отправляем новое сообщение с магазином
+            await query.message.delete()
             await show_my_shop(update, context, shop)
         return
     
@@ -515,13 +517,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cancel_delete":
         shop = get_user_shop(user_id)
         if shop:
+            await query.message.delete()
             await show_my_shop(update, context, shop)
         return
 
-# Добавление категории
+# Добавление категории - ЭТА ФУНКЦИЯ ВАЖНА!
 async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category_name = update.message.text
     shop_id = context.user_data.get('temp_shop_id')
+    
+    logger.info(f"СОЗДАНИЕ КАТЕГОРИИ: '{category_name}' для магазина {shop_id}")
     
     if not shop_id:
         await update.message.reply_text("Ошибка. Попробуйте заново.")
@@ -530,6 +535,7 @@ async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if add_category(shop_id, category_name):
         await update.message.reply_text(f"✅ Категория '{category_name}' создана!")
         
+        # Показываем обновленный магазин
         shop = get_user_shop(update.effective_user.id)
         if shop:
             await show_my_shop(update, context, shop)
@@ -627,13 +633,7 @@ def main():
     )
     application.add_handler(shop_conv)
     
-    # ОСТАЛЬНЫЕ КНОПКИ
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
-    
-    # INLINE КНОПКИ
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    
-    # ДОБАВЛЕНИЕ КАТЕГОРИИ
+    # ДОБАВЛЕНИЕ КАТЕГОРИИ - ИСПРАВЛЕНО!
     category_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(handle_callback, pattern="^add_category_")],
         states={
@@ -658,6 +658,10 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(product_conv)
+    
+    # ОСТАЛЬНЫЕ КНОПКИ - ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ!
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
+    application.add_handler(CallbackQueryHandler(handle_callback))
     
     logger.info("Бот запущен!")
     application.run_polling()
