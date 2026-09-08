@@ -32,7 +32,7 @@ BOT_TOKEN = "8829785655:AAHv-44OuFHSUV0BFI38kyROyng5PdEVEe0"
  ADD_PRODUCT_NAME, ADD_PRODUCT_PRICE, ADD_PRODUCT_PHOTO, ADD_PRODUCT_DESC,
  ADD_PAYMENT_DETAILS, 
  PURCHASE_ADDRESS, PURCHASE_PAYMENT,
- ORDER_CONFIRMATION, SELECT_CATEGORY_FOR_PRODUCT) = range(15)
+ ORDER_CONFIRMATION) = range(14)
 
 # Инициализация базы данных
 def init_db():
@@ -129,7 +129,7 @@ def init_db():
     except Exception as e:
         logger.error(f"Ошибка инициализации БД: {e}")
 
-# Вспомогательные функции для работы с БД
+# Функции для работы с БД
 def is_user_registered(user_id):
     try:
         conn = sqlite3.connect('shop_bot.db')
@@ -167,11 +167,27 @@ def get_user_shop(user_id):
         logger.error(f"Ошибка получения магазина: {e}")
         return None
 
+def create_shop(user_id, name, about, photo_id, agreement):
+    try:
+        conn = sqlite3.connect('shop_bot.db')
+        c = conn.cursor()
+        c.execute("""INSERT INTO shops (owner_id, name, about, photo_id, agreement, created_date)
+                     VALUES (?, ?, ?, ?, ?, ?)""",
+                  (user_id, name, about, photo_id, agreement, datetime.now()))
+        conn.commit()
+        shop_id = c.lastrowid
+        conn.close()
+        logger.info(f"Магазин создан: {name} (ID: {shop_id})")
+        return shop_id
+    except Exception as e:
+        logger.error(f"Ошибка создания магазина: {e}")
+        return None
+
 def get_shop_categories(shop_id):
     try:
         conn = sqlite3.connect('shop_bot.db')
         c = conn.cursor()
-        c.execute("SELECT category_id, name FROM categories WHERE shop_id=? ORDER BY name", (shop_id,))
+        c.execute("SELECT category_id, name FROM categories WHERE shop_id=?", (shop_id,))
         categories = c.fetchall()
         conn.close()
         return categories
@@ -425,22 +441,7 @@ def cancel_order(order_id):
         logger.error(f"Ошибка отмены заказа: {e}")
         return False
 
-def get_shop_products(shop_id):
-    try:
-        conn = sqlite3.connect('shop_bot.db')
-        c = conn.cursor()
-        c.execute("""SELECT p.product_id, p.name, p.price, p.photo_id, p.description, c.name 
-                     FROM products p 
-                     JOIN categories c ON p.category_id = c.category_id 
-                     WHERE c.shop_id = ?""", (shop_id,))
-        products = c.fetchall()
-        conn.close()
-        return products
-    except Exception as e:
-        logger.error(f"Ошибка получения товаров магазина: {e}")
-        return []
-
-# Создание клавиатуры в зависимости от статуса пользователя
+# Создание клавиатуры
 async def get_main_keyboard(user_id):
     shop = get_user_shop(user_id)
     
@@ -504,7 +505,6 @@ async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("😕 Пока нет магазинов.")
             return
         
-        # Создаем клавиатуру с магазинами
         keyboard = []
         for shop in shops:
             shop_id, name, about, photo_id = shop
@@ -516,7 +516,6 @@ async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     elif text.startswith("🏪 ") and text != "🏪 Мой магазин":
-        # Выбор магазина для покупки
         shop_name = text.replace("🏪 ", "")
         shop = get_shop_by_name(shop_name)
         
@@ -527,8 +526,107 @@ async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
         shop_id, owner_id, name, about, photo_id, agreement, created_date = shop
         context.user_data['current_shop_id'] = shop_id
         
-        # Показываем магазин с фото и категориями
-        await show_shop_for_buying(update, context, shop)
+        categories = get_shop_categories(shop_id)
+        
+        keyboard = []
+        for cat_id, cat_name in categories:
+            keyboard.append([KeyboardButton(f"📂 {cat_name}")])
+        
+        if not keyboard:
+            await update.message.reply_text("В этом магазине пока нет категорий.")
+            return
+        
+        keyboard.append([KeyboardButton("🔙 Назад")])
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        caption = f"🏪 {name}\n\n📝 {about}\n\nВыберите категорию:"
+        
+        if photo_id:
+            await update.message.reply_photo(
+                photo=photo_id,
+                caption=caption,
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text(caption, reply_markup=reply_markup)
+        return
+    
+    elif text.startswith("📂 "):
+        category_name = text.replace("📂 ", "")
+        shop_id = context.user_data.get('current_shop_id')
+        
+        if not shop_id:
+            await update.message.reply_text("Ошибка. Выберите магазин сначала.")
+            return
+        
+        categories = get_shop_categories(shop_id)
+        category_id = None
+        for cat_id, cat_name in categories:
+            if cat_name == category_name:
+                category_id = cat_id
+                break
+        
+        if not category_id:
+            await update.message.reply_text("Категория не найдена")
+            return
+        
+        products = get_category_products(category_id)
+        
+        if not products:
+            await update.message.reply_text(f"В категории '{category_name}' пока нет товаров.")
+            return
+        
+        keyboard = []
+        for prod_id, name, price, photo, desc in products:
+            keyboard.append([KeyboardButton(f"📦 {name} - {price}₽")])
+        
+        keyboard.append([KeyboardButton("🔙 Назад")])
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"📂 {category_name}\n\nВыберите товар:",
+            reply_markup=reply_markup
+        )
+        return
+    
+    elif text.startswith("📦 "):
+        product_info = text.replace("📦 ", "")
+        product_name = product_info.split(" - ")[0]
+        product_price = product_info.split(" - ")[1] if " - " in product_info else ""
+        
+        # Ищем товар по названию в текущей категории
+        shop_id = context.user_data.get('current_shop_id')
+        if not shop_id:
+            await update.message.reply_text("Ошибка. Выберите магазин сначала.")
+            return
+        
+        categories = get_shop_categories(shop_id)
+        found_product = None
+        for cat_id, cat_name in categories:
+            products = get_category_products(cat_id)
+            for prod in products:
+                if prod[1] == product_name:
+                    found_product = prod
+                    break
+            if found_product:
+                break
+        
+        if not found_product:
+            await update.message.reply_text("Товар не найден")
+            return
+        
+        prod_id, name, price, photo, desc = found_product
+        context.user_data['current_product'] = prod_id
+        
+        text = f"📦 {name}\n💰 {price}₽\n\n📝 {desc if desc else 'Описание отсутствует'}"
+        
+        keyboard = [[InlineKeyboardButton("🛒 Оформить заказ", callback_data=f"order_product_{prod_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if photo:
+            await update.message.reply_photo(photo=photo, caption=text, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(text, reply_markup=reply_markup)
         return
     
     elif text == "📦 Мои покупки":
@@ -547,12 +645,10 @@ async def handle_main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def show_my_shop(update: Update, context: ContextTypes.DEFAULT_TYPE, shop):
     shop_id, owner_id, name, about, photo_id, agreement, created_date = shop
     
-    # Создаем inline клавиатуру для управления
     keyboard = [
         [InlineKeyboardButton("📁 Создать категорию", callback_data=f"add_category_{shop_id}")],
     ]
     
-    # Добавляем существующие категории как кнопки
     categories = get_shop_categories(shop_id)
     for cat_id, cat_name in categories:
         keyboard.append([InlineKeyboardButton(f"📂 {cat_name}", callback_data=f"manage_category_{cat_id}")])
@@ -572,74 +668,6 @@ async def show_my_shop(update: Update, context: ContextTypes.DEFAULT_TYPE, shop)
         )
     else:
         await update.message.reply_text(caption, reply_markup=reply_markup)
-
-async def show_shop_for_buying(update: Update, context: ContextTypes.DEFAULT_TYPE, shop):
-    shop_id, owner_id, name, about, photo_id, agreement, created_date = shop
-    
-    categories = get_shop_categories(shop_id)
-    
-    # Создаем клавиатуру с категориями
-    keyboard = []
-    for cat_id, cat_name in categories:
-        keyboard.append([KeyboardButton(f"📂 {cat_name}")])
-    
-    if not keyboard:
-        await update.message.reply_text("В этом магазине пока нет категорий.")
-        return
-    
-    keyboard.append([KeyboardButton("🔙 Назад")])
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
-    caption = f"🏪 {name}\n\n📝 {about}\n\nВыберите категорию:"
-    
-    if photo_id:
-        await update.message.reply_photo(
-            photo=photo_id,
-            caption=caption,
-            reply_markup=reply_markup
-        )
-    else:
-        await update.message.reply_text(caption, reply_markup=reply_markup)
-
-async def show_category_products(update: Update, context: ContextTypes.DEFAULT_TYPE, category_id, category_name):
-    products = get_category_products(category_id)
-    
-    if not products:
-        await update.message.reply_text(f"В категории '{category_name}' пока нет товаров.")
-        return
-    
-    # Создаем клавиатуру с товарами
-    keyboard = []
-    for prod_id, name, price, photo, desc in products:
-        keyboard.append([KeyboardButton(f"📦 {name} - {price}₽")])
-    
-    keyboard.append([KeyboardButton("🔙 Назад")])
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
-    await update.message.reply_text(
-        f"📂 {category_name}\n\nВыберите товар:",
-        reply_markup=reply_markup
-    )
-
-async def show_product_details(update: Update, context: ContextTypes.DEFAULT_TYPE, product_id):
-    product = get_product(product_id)
-    if not product:
-        await update.message.reply_text("Товар не найден")
-        return
-    
-    prod_id, cat_id, name, price, photo, desc = product
-    
-    context.user_data['current_product'] = prod_id
-    
-    text = f"📦 {name}\n💰 {price}₽\n\n📝 {desc if desc else 'Описание отсутствует'}"
-    
-    keyboard = [[InlineKeyboardButton("🛒 Оформить заказ", callback_data=f"order_product_{prod_id}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if photo:
-        await update.message.reply_photo(photo=photo, caption=text, reply_markup=reply_markup)
-    else:
-        await update.message.reply_text(text, reply_markup=reply_markup)
 
 async def show_my_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -724,7 +752,7 @@ async def create_shop_agreement(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     agreement = update.message.text
     
-    success = create_shop(
+    shop_id = create_shop(
         user_id,
         context.user_data.get('shop_name', ''),
         context.user_data.get('shop_about', ''),
@@ -732,7 +760,7 @@ async def create_shop_agreement(update: Update, context: ContextTypes.DEFAULT_TY
         agreement
     )
     
-    if success:
+    if shop_id:
         reply_markup = await get_main_keyboard(user_id)
         await update.message.reply_text(
             f"✅ Магазин '{context.user_data.get('shop_name', '')}' создан!",
@@ -759,14 +787,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"Callback: {data} от {user_id}")
     
-    # Создание категории
     if data.startswith("add_category_"):
         shop_id = int(data.split("_")[2])
         context.user_data['temp_shop_id'] = shop_id
         await query.edit_message_text("Введите название категории:")
         return ADD_CATEGORY
     
-    # Управление категорией
     elif data.startswith("manage_category_"):
         category_id = int(data.split("_")[2])
         category = get_category_by_id(category_id)
@@ -783,7 +809,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Показываем товары в категории
         products = get_category_products(category_id)
         text = f"📂 {cat_name}\n\n"
         if products:
@@ -796,14 +821,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=reply_markup)
         return
     
-    # Добавление товара
     elif data.startswith("add_product_"):
         category_id = int(data.split("_")[2])
         context.user_data['temp_category_id'] = category_id
         await query.edit_message_text("Введите название товара:")
         return ADD_PRODUCT_NAME
     
-    # Удаление категории
     elif data.startswith("delete_category_"):
         category_id = int(data.split("_")[2])
         category = get_category_by_id(category_id)
@@ -820,7 +843,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
     
-    # Подтверждение удаления категории
     elif data.startswith("confirm_del_cat_"):
         category_id = int(data.split("_")[3])
         category = get_category_by_id(category_id)
@@ -828,7 +850,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             shop_id = category[1]
             if delete_category(category_id):
                 await query.edit_message_text("✅ Категория удалена!")
-                # Возвращаемся в магазин
                 shop = get_user_shop(user_id)
                 if shop:
                     await show_my_shop(update, context, shop)
@@ -836,7 +857,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("❌ Ошибка удаления")
         return
     
-    # Возврат в магазин
     elif data.startswith("back_to_shop_"):
         shop_id = int(data.split("_")[2])
         shop = get_shop_by_id(shop_id)
@@ -844,13 +864,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_my_shop(update, context, shop)
         return
     
-    # Просмотр товара
-    elif data.startswith("view_product_"):
-        product_id = int(data.split("_")[2])
-        await show_product_details(update, context, product_id)
-        return
-    
-    # Оформление заказа
     elif data.startswith("order_product_"):
         product_id = int(data.split("_")[2])
         product = get_product(product_id)
@@ -862,7 +875,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📍 Введите адрес доставки:")
         return PURCHASE_ADDRESS
     
-    # Добавление реквизитов
     elif data.startswith("add_payment_"):
         shop_id = int(data.split("_")[2])
         context.user_data['temp_shop_id'] = shop_id
@@ -873,7 +885,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ADD_PAYMENT_DETAILS
     
-    # Удаление магазина
     elif data.startswith("delete_shop_"):
         shop_id = int(data.split("_")[2])
         keyboard = [
@@ -887,7 +898,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Подтверждение удаления магазина
     elif data.startswith("confirm_del_shop_"):
         shop_id = int(data.split("_")[3])
         conn = sqlite3.connect('shop_bot.db')
@@ -910,7 +920,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_my_shop(update, context, shop)
         return
     
-    # Связь с продавцом
     elif data.startswith("contact_seller_"):
         order_id = int(data.split("_")[2])
         order = get_order(order_id)
@@ -929,7 +938,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("💬 Напишите сообщение продавцу:")
         return ORDER_CONFIRMATION
     
-    # Ответ покупателю
     elif data.startswith("reply_to_buyer_"):
         order_id = int(data.split("_")[2])
         order = get_order(order_id)
@@ -943,7 +951,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("💬 Напишите сообщение покупателю:")
         return ORDER_CONFIRMATION
     
-    # Завершение заказа
     elif data.startswith("complete_order_"):
         order_id = int(data.split("_")[2])
         order = get_order(order_id)
@@ -968,7 +975,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ Ошибка")
         return
     
-    # Отмена заказа
     elif data.startswith("cancel_order_"):
         order_id = int(data.split("_")[2])
         order = get_order(order_id)
@@ -1002,7 +1008,6 @@ async def add_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category_id = add_category(shop_id, category_name)
     
     if category_id:
-        # Показываем обновленный магазин
         shop = get_user_shop(update.effective_user.id)
         if shop:
             await show_my_shop(update, context, shop)
@@ -1057,7 +1062,6 @@ async def add_product_description(update: Update, context: ContextTypes.DEFAULT_
     if product_id:
         await update.message.reply_text("✅ Товар добавлен!")
         
-        # Показываем обновленную категорию
         category = get_category_by_id(category_id)
         if category:
             shop_id = category[1]
@@ -1158,7 +1162,6 @@ async def order_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Ошибка создания заказа.")
         return ConversationHandler.END
     
-    # Уведомление продавцу
     shop = get_shop_by_id(shop_id)
     if shop:
         try:
@@ -1173,7 +1176,6 @@ async def order_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
     
-    # Ответ покупателю
     if payment_method == "Перевод":
         payment_details = get_payment_details(shop_id)
         details_text = "Реквизиты для оплаты:\n\n"
@@ -1223,13 +1225,13 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Магазин не найден")
         return
     
-    if user_id == order[2]:  # Покупатель
+    if user_id == order[2]:
         await context.bot.send_message(
             chat_id=shop[1],
             text=f"💬 Сообщение от покупателя:\n\n{text}"
         )
         await update.message.reply_text("✅ Сообщение отправлено продавцу!")
-    elif user_id == shop[1]:  # Продавец
+    elif user_id == shop[1]:
         await context.bot.send_message(
             chat_id=order[2],
             text=f"💬 Сообщение от продавца:\n\n{text}"
