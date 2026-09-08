@@ -410,7 +410,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Главное меню:", reply_markup=reply_markup)
         return
 
-# Создание магазина - ЭТИ ФУНКЦИИ ВАЖНЫ!
+# Создание магазина
 async def create_shop_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     shop_name = update.message.text
@@ -789,7 +789,7 @@ def main():
     # Старт
     application.add_handler(CommandHandler("start", start))
     
-    # Создание магазина - ВАЖНО: entry_points должен быть правильным
+    # Создание магазина
     shop_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^➕ Создать магазин$"), handle_buttons)],
         states={
@@ -802,7 +802,7 @@ def main():
             AGREEMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_shop_agreement)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True  # Добавляем это!
+        per_message=True
     )
     application.add_handler(shop_conv)
     
